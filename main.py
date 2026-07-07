@@ -16,6 +16,11 @@ except Exception as e:
     model = None
     action_model = None
 
+# 1.5 Endpoint de Health Check (Ping Ligero)
+# Excluido de OpenAPI/Swagger (include_in_schema=False) para no consumir RAM al renderizar /docs
+@app.get("/health", include_in_schema=False)
+def health_check():
+    return {"status": "ok"}
 
 # 2. Definir la estructura de comunicación con Spring Boot (Los 4 sensores)
 class SensorData(BaseModel):
