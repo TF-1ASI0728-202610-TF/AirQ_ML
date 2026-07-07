@@ -18,7 +18,8 @@ except Exception as e:
 
 # 1.5 Endpoint de Health Check (Ping Ligero)
 # Excluido de OpenAPI/Swagger (include_in_schema=False) para no consumir RAM al renderizar /docs
-@app.get("/health", include_in_schema=False)
+@app.api_route("/health", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/health/", methods=["GET", "HEAD"], include_in_schema=False)
 def health_check():
     return {"status": "ok"}
 
