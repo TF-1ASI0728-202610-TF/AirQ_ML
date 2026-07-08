@@ -5,16 +5,17 @@ import pandas as pd
 
 app = FastAPI(title="AirQ IA Microservice")
 
-# 1. Cargar los modelos empaquetados al iniciar el servidor
+# 1. Carga de modelos
 try:
     model = joblib.load('airq_universal_model.pkl')
-    print("Modelo Universal AirQ (Riesgo) cargado.")
-    action_model = joblib.load('airq_action_model.pkl')
-    print("Modelo IA para Acciones cargado y listo.")
+    air_quality_model = joblib.load('air_quality_model.pkl')
+    climate_model = joblib.load('climate_model.pkl')
+    print("Modelos IA separados cargados y listos.")
 except Exception as e:
     print(f"Error cargando los modelos: {e}")
     model = None
-    action_model = None
+    air_quality_model = None
+    climate_model = None
 
 # 1.5 Endpoint de Health Check (Ping Ligero)
 # Excluido de OpenAPI/Swagger (include_in_schema=False) para no consumir RAM al renderizar /docs
@@ -44,7 +45,7 @@ class PredictionResponse(BaseModel):
 # 3. El Endpoint de Inferencia
 @app.post("/predict", response_model=PredictionResponse)
 def predict_air_quality(request: PredictionRequest):
-    if model is None or action_model is None:
+    if model is None or air_quality_model is None or climate_model is None:
         raise HTTPException(status_code=500, detail="Los modelos de IA no están disponibles.")
 
     if not request.data:
@@ -64,35 +65,34 @@ def predict_air_quality(request: PredictionRequest):
     # 4. Inferencia del Modelo Universal (deduce el riesgo general)
     riesgo = model.predict(features)[0]
 
-    # 5. Inferencia del Modelo de Acciones (100% IA)
-    action_id = action_model.predict(features)[0]
+    # 5. Inferencia de Modelos Separados (100% IA, cero sesgos)
+    air_features = features[['co2', 'pm25']]
+    climate_features = features[['temp', 'hum']]
     
-    co2_val = features['co2'][0]
-    pm25_val = features['pm25'][0]
+    air_action_id = air_quality_model.predict(air_features)[0]
+    climate_action_id = climate_model.predict(climate_features)[0]
     
-    acciones_dict = {
-        1: "CRITICAL CONFLICT: Alta toxicidad externa por PM2.5 y asfixia por CO2. Rejillas CERRADAS para aislamiento. Filtro HEPA al 100%. AC en modo COOL. AC en modo DRY. ¡ALERT: Se requiere evacuación del área por imposibilidad de renovación segura de oxígeno!",
-        2: "CRITICAL CONFLICT: Alta toxicidad externa por PM2.5 y asfixia por CO2. Rejillas CERRADAS para aislamiento. Filtro HEPA al 100%. AC en modo COOL. ¡ALERT: Se requiere evacuación del área por imposibilidad de renovación segura de oxígeno!",
-        3: "CRITICAL CONFLICT: Alta toxicidad externa por PM2.5 y asfixia por CO2. Rejillas CERRADAS para aislamiento. Filtro HEPA al 100%. AC en modo DRY. ¡ALERT: Se requiere evacuación del área por imposibilidad de renovación segura de oxígeno!",
-        4: "CRITICAL CONFLICT: Alta toxicidad externa por PM2.5 y asfixia por CO2. Rejillas CERRADAS para aislamiento. Filtro HEPA al 100%. ¡ALERT: Se requiere evacuación del área por imposibilidad de renovación segura de oxígeno!",
-        
-        5: f"CRITICAL: Contaminación por polvo (PM2.5: {pm25_val}). Rejillas CERRADAS, filtro HEPA al 100%. AC en modo COOL + DRY interno.",
-        6: f"CRITICAL: Contaminación por polvo (PM2.5: {pm25_val}). Rejillas CERRADAS, filtro HEPA al 100%. AC en modo COOL interno.",
-        7: f"CRITICAL: Contaminación por polvo (PM2.5: {pm25_val}). Rejillas CERRADAS, filtro HEPA al 100%. AC en modo DRY interno.",
-        8: f"CRITICAL: Contaminación por polvo (PM2.5: {pm25_val}). Rejillas CERRADAS, filtro HEPA al 100%. Sistemas de climatización en espera.",
-        
-        9: f"ALERT: Concentración de CO2 alta ({co2_val} ppm). Rejillas ABIERTAS al 100% y Extractores de aire al máximo. AC en modo COOL + DRY activo.",
-        10: f"ALERT: Concentración de CO2 alta ({co2_val} ppm). Rejillas ABIERTAS al 100% y Extractores de aire al máximo. AC en modo COOL activo.",
-        11: f"ALERT: Concentración de CO2 alta ({co2_val} ppm). Rejillas ABIERTAS al 100% y Extractores de aire al máximo. AC en modo DRY activo.",
-        12: f"ALERT: Concentración de CO2 alta ({co2_val} ppm). Rejillas ABIERTAS al 100% y Extractores de aire al máximo. ",
-        
-        13: "MEDIUM: Aire limpio pero ambiente bochornoso. AC configurado en modo COOL + DRY.",
-        14: "MEDIUM: Confort térmico bajo por calor. AC configurado en modo COOL.",
-        15: "MEDIUM: Humedad relativa elevada. AC configurado en modo DRY (Deshumidificador).",
-        16: "LOW: Calidad del aire óptima y confort térmico adecuado. Todos los actuadores en modo ecológico/espera."
+    co2_val = air_features['co2'][0]
+    pm25_val = air_features['pm25'][0]
+    
+    # Mapeo de Calidad de Aire (Controla Extractores, Filtros y Rejillas)
+    air_dict = {
+        0: "Calidad de aire óptima (Rejillas ABIERTAS)",
+        1: f"Alerta Polvo (PM2.5: {pm25_val}). Filtro HEPA activo. Rejillas CERRADAS",
+        2: f"Alerta CO2 ({co2_val} ppm). EXTRACTOR al máximo. Rejillas ABIERTAS",
+        3: f"CRÍTICO: Polvo y Asfixia. EXTRACTOR al máximo, Filtro HEPA activo. Rejillas CERRADAS (Aislamiento)"
     }
     
-    action = acciones_dict.get(action_id, "LOW: Calidad del aire óptima y confort térmico adecuado. Todos los actuadores en modo ecológico/espera.")
+    # Mapeo de Clima (Controla Aire Acondicionado)
+    climate_dict = {
+        0: "Confort térmico ideal",
+        1: "Calor detectado. AC en modo COOL",
+        2: "Humedad alta. AC en modo DRY",
+        3: "Bochorno severo. AC en modo COOL y DRY"
+    }
+    
+    # Fusión de los outputs de ambos modelos de IA
+    action = f"{air_dict.get(air_action_id, 'Normal')} | {climate_dict.get(climate_action_id, 'Normal')}"
 
     return PredictionResponse(
         riskLevel=riesgo,
